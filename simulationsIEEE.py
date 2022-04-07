@@ -90,6 +90,8 @@ def loadTrips(stations, places, model):
                             TRIP.DRIVINGDISTANCE,
                             TRIP.DRIVINGDURATION
                     from	TRIP
+                    where   TRIP.MAINMODE <> 16 OR
+                            TRIP.DRIVINGDISTANCE > 500
                     '''
     dataFrameEdges = pd.read_sql_query(sqlQuery, conn)
     conn.close()
