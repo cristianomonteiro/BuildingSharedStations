@@ -6,7 +6,7 @@ from gurobipy import GRB
 import psycopg2 as pg
 import numpy as np
 from math import floor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 def loadMultiGraph():
@@ -170,12 +170,12 @@ class Trip:
     ADJUSTED_MONTH = 1
     ADJUSTED_YEAR = 2017
 
-    def adjustDay(timeDepartureOld, timeArrivalOld):
+    def adjustDay(timeDepartureOld, drivingDuration):
         #The weekday() starts from 0 but it does not exist a day 0 in the calendar. Then, a +1 solves this issue
         adjustedDayDeparture = timeDepartureOld.weekday() + 1
 
         timeDepartureNew = timeDepartureOld.replace(day=adjustedDayDeparture, month=Trip.ADJUSTED_MONTH, year=Trip.ADJUSTED_YEAR)
-        timeArrivalNew = timeDepartureNew + (timeArrivalOld - timeDepartureOld)
+        timeArrivalNew = timeDepartureNew + timedelta(minutes=drivingDuration)
         
         return timeDepartureNew, timeArrivalNew
 
@@ -189,7 +189,7 @@ class Trip:
         self.drivingDistance = drivingDistance
         self.drivingDuration = drivingDuration
 
-        self.timestampDeparture, self.timestampArrival = Trip.adjustDay(timestampDeparture, timestampArrival)
+        self.timestampDeparture, self.timestampArrival = Trip.adjustDay(timestampDeparture, self.drivingDuration)
 
         self.startStationsVars = list()
         for startStation in self.placeStart.reachedStations:
@@ -207,7 +207,7 @@ class Trip:
 
         self.variableFilter = createVariable(nameVar=self.idTrip + '_filter', upperBound=floor(self.expansionFactor), model=model)
 
-def buildGurobiModel(G, distanceCutOff=100, pricesMultiplier=1):
+def buildGurobiModel(G, distanceCutOff=100, pricesMultiplier=1, MONTHLY_CAR_RENTAL_COSTS=2815.01):
     #Defining Uber costs
     MINIMUM_FARE = 5.28
     RESERVATION_FEE = 0.75
@@ -215,18 +215,13 @@ def buildGurobiModel(G, distanceCutOff=100, pricesMultiplier=1):
     MINUTE_COST = 0.3
     KM_COST = 1.03
 
-    #Defining Localiza Meoo car rental costs for 3.000 km monthly mileage limit and contract of 12 months in São Paulo
-    MONTHLY_CAR_RENTAL_COSTS = 2780
-    #Defining Movida Mensal Flex car rental costs for 3.000 km monthly mileage limit and contract from 1 month to 24 months in São Paulo
-    MONTHLY_CAR_RENTAL_COSTS = 2765.95
-
-    #Defining Gas prices. Price from https://precodoscombustiveis.com.br/pt-br/city/brasil/sao-paulo/sao-paulo/3830 got day 03/29/2022 
-    GAS_LITER = 7.05
+    #Defining Gas prices. Price from https://precodoscombustiveis.com.br/pt-br/city/brasil/sao-paulo/sao-paulo/3830 got day 2022/11/04.
+    GAS_LITER = 7.07
     DISTANCE_PER_LITER = 10
     GAS_PER_KM = GAS_LITER / DISTANCE_PER_LITER
 
     #Create a Gurobi Model
-    model = gp.Model("IEEE")
+    model = gp.Model("IEEE T-ITS")
 
     objective = 0
     #Create the variables and define the objective
@@ -332,38 +327,62 @@ def buildGurobiModel(G, distanceCutOff=100, pricesMultiplier=1):
 folderSaveSolutions = 'Optimal Solutions'
 flagError = False
 G = loadMultiGraph()
-for distanceCutOff in [100, 200, 300, 400, 500]:
-    for pricesMultiplier in np.arange(2, 0, -0.1):
-        model = buildGurobiModel(G, distanceCutOff, pricesMultiplier)
-        try:
-            #model.Params.Presolve = 0
-            #model.Params.Method = 0
-            model.Params.LogToConsole = 0
-            model.optimize()
+#Defining Localiza Meoo car rental costs for 3.000 km monthly mileage limit and contract of 12 months in São Paulo
+#THIS PRICE DOES NOT INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th.
+LOCALIZA_MONTHLY_RENTAL_3000_NO_GLASSES_TIRES = 2521
+#Defining Movida Mensal Flex car rental costs for 3.000 km monthly mileage limit and contract of 1 month in São Paulo for Mobi Like or similar (AX Group).
+#THIS PRICE DOES NOT INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th. ADDITIONAL KMs WILL COST R$0,49.
+MOVIDA_MONTHLY_RENTAL_3000_NO_GLASSES_TIRES = 2065.73
+#Defining Movida Mensal Flex car rental costs for 3.000 km monthly mileage limit and contract of 1 month in São Paulo for Mobi Like or similar (AX Group).
+#THIS PRICE INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th, 2022. ADDITIONAL KMs WILL COST R$0,49.
+MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES = 2468.93
+#Defining Movida Mensal Flex car rental costs for 4.000 km monthly mileage limit and contract of 1 month in São Paulo for Mobi Like or similar (AX Group).
+#THIS PRICE DOES NOT INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th, 2022. ADDITIONAL KMs WILL COST R$0,49.
+MOVIDA_MONTHLY_RENTAL_4000_NO_GLASSES_TIRES = 2411.81
+#Defining Movida Mensal Flex car rental costs for 4.000 km monthly mileage limit and contract of 1 month in São Paulo for Mobi Like or similar (AX Group).
+#THIS PRICE INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th, 2022. ADDITIONAL KMs WILL COST R$0,49.
+MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES = 2815.01
 
-            for variable in model.getVars():
-                if abs(variable.X - round(variable.X)) > 0.1:
-                    print("ERROR:\tNOT AN INTEGER VALUE!!!", variable.VarName, variable.X)
-                    flagError = True
+pricesMileageLimits = { 3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES,
+                        4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
+
+for mileageLimit in pricesMileageLimits.keys():
+    for distanceCutOff in [100, 200, 300, 400, 500]:
+        for priceMultiplier in np.arange(2, 0, -0.1):
+            adjustedPriceMultiplier = round(priceMultiplier, 1)
+            model = buildGurobiModel(G, distanceCutOff, adjustedPriceMultiplier, pricesMileageLimits[mileageLimit])
+            try:
+                #model.Params.Presolve = 0
+                #model.Params.Method = 0
+                model.Params.LogToConsole = 0
+                model.optimize()
+
+                for variable in model.getVars():
+                    if abs(variable.X - round(variable.X)) > 0.001:
+                        print("ERROR:\tNOT AN INTEGER VALUE!!!", variable.VarName, variable.X)
+                        flagError = True
+                        break
+
+                if model.objVal > 0.1:
+                    print(  "OBJECTIVE VALUE:", model.objVal,
+                            "MILEAGE:", mileageLimit,
+                            "DISTANCE:", distanceCutOff,
+                            "MULTIPLIER:", adjustedPriceMultiplier)
+                    
+                    folderPath = Path('./' + folderSaveSolutions + '/' + str(mileageLimit) + '/' + str(distanceCutOff))
+                    folderPath.mkdir(parents=True, exist_ok=True)
+                    #Multiplier as percentage is easier to explain, then it is multiplied by 100. The round function was needed to fix numeric errors.
+                    percentagePrice = int(round(adjustedPriceMultiplier*100, 0))
+                    fileName = folderPath / (str(percentagePrice) + '.json')
+                    model.write(str(fileName.resolve()))
+                else:
                     break
 
-            if model.objVal > 0.1:
-                print("OBJECTIVE VALUE:", model.objVal, "MULTIPLIER:", pricesMultiplier, "DISTANCE:", distanceCutOff)
-                
-                folderPath = Path('./' + folderSaveSolutions + '/' + str(distanceCutOff))
-                folderPath.mkdir(parents=True, exist_ok=True)
-                #Multiplier as percentage is easier to explain, then it is multiplied by 100. The round function was needed to fix numeric errors.
-                percentagePrice = int(round(pricesMultiplier*100, 0))
-                fileName = folderPath / (str(percentagePrice) + '.json')
-                model.write(str(fileName.resolve()))
-            else:
+            except gp.GurobiError as e:
+                print("ERROR:", str(e))
                 break
 
-        except gp.GurobiError as e:
-            print("ERROR:", str(e))
-            break
-
+            if flagError:
+                break
         if flagError:
             break
-    if flagError:
-        break
