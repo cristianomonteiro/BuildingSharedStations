@@ -160,8 +160,8 @@ class Station:
         self.monthlyParkingExpenses = monthlyParkingExpenses
 
         lowerBound = None
-        if self.idVertex in stationsInvolved:
-            lowerBound = 1
+        #if self.idVertex in stationsInvolved:
+        #    lowerBound = 1
         
         self.variableStart = createVariable(nameVar=self.idVertex + '_start', lowerBound=lowerBound, model=model)
         self.tripsTimeStart = list()
@@ -225,7 +225,7 @@ class Trip:
 
 #Discover which trips and stations were served and used in the Free-floating with parameters 500 meters and 0.7 multiplier
 def selectTripsStationsInvolved():
-    fileName = 'Optimal Solutions/Free Floating/4000/500/70.json'
+    fileName = 'Optimal Solutions/Free Floating/3000/500/70.json'
     tripsAmountServed = {}
     stationsInvolved = set()
     with open(fileName) as jsonFile:
@@ -418,8 +418,8 @@ MOVIDA_MONTHLY_RENTAL_4000_NO_GLASSES_TIRES = 2411.81
 #THIS PRICE INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th, 2022. ADDITIONAL KMs WILL COST R$0,49.
 MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES = 2815.01
 
-pricesMileageLimits = { #3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES,
-                        4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
+pricesMileageLimits = { 3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES}#,
+                        #4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
 
 for mileageLimit in pricesMileageLimits.keys():
     #It is only simulated for distance of 500 meters because the Free-Floating used this, and smaller distances do not reach the same stations

@@ -155,13 +155,13 @@ def createVariable(nameVar, model, lowerBound=None, upperBound=None):
     return createdVar
 
 class Station:
-    def __init__(self, idVertex, monthlyParkingExpenses, stationsInvolved, model):
+    def __init__(self, idVertex, monthlyParkingExpenses, stationsInvolved, nVehiclesPerParking, model):
         self.idVertex = idVertex
         self.monthlyParkingExpenses = monthlyParkingExpenses
 
         lowerBound = None
         if self.idVertex in stationsInvolved:
-            lowerBound = 1
+            lowerBound = nVehiclesPerParking
         
         self.variableStart = createVariable(nameVar=self.idVertex + '_start', lowerBound=lowerBound, model=model)
         self.tripsTimeStart = list()
@@ -266,7 +266,7 @@ def calculateProfitDifference(MINIMUM_FARE, RESERVATION_FEE, BASE_FARE, MINUTE_C
     
     return freeFloatingProfitDifference
 
-def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTAL_COSTS=2815.01):
+def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTAL_COSTS=2815.01, nVehiclesPerParking=0):
     #Defining Uber costs
     MINIMUM_FARE = 5.28
     RESERVATION_FEE = 0.75
@@ -295,7 +295,7 @@ def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTA
             if idVertex.startswith('station') and idVertex in stationsInvolved:
                 #All edges connected to a station has the same parkingExpenses attribute. Then [0][2] will get the attribute from the first edge
                 monthlyParkingExpenses = list(G.edges(idVertex, data='parkingexpenses'))[0][2]
-                station = Station(idVertex, monthlyParkingExpenses, stationsInvolved, model)
+                station = Station(idVertex, monthlyParkingExpenses, stationsInvolved, nVehiclesPerParking, model)
                 stations[station.idVertex] = station
 
             elif idVertex.startswith('place'):
@@ -399,7 +399,8 @@ def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTA
 sc = gp.StatusConstClass
 gurobiStatus = {sc.__dict__[k]: k for k in sc.__dict__.keys() if k[0] >= 'A' and k[0] <= 'Z'}
 
-folderSaveSolutions = 'Optimal Solutions/Restricted Partial Floating'
+nVehiclesPerParking = 2
+folderSaveSolutions = 'Optimal Solutions/Restricted ' + str(nVehiclesPerParking) + ' Partial Floating'
 flagError = False
 G = loadMultiGraph()
 #Defining Localiza Meoo car rental costs for 3.000 km monthly mileage limit and contract of 12 months in São Paulo
@@ -418,15 +419,15 @@ MOVIDA_MONTHLY_RENTAL_4000_NO_GLASSES_TIRES = 2411.81
 #THIS PRICE INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th, 2022. ADDITIONAL KMs WILL COST R$0,49.
 MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES = 2815.01
 
-pricesMileageLimits = { #3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES,
-                        4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
+pricesMileageLimits = { 3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES}#,
+                        #4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
 
 for mileageLimit in pricesMileageLimits.keys():
     #It is only simulated for distance of 500 meters because the Free-Floating used this, and smaller distances do not reach the same stations
     for distanceCutOff in [500]:#[100, 200, 300, 400, 500]:
         for priceMultiplier in np.arange(2, 0, -0.1):
             adjustedPriceMultiplier = round(priceMultiplier, 1)
-            model = buildGurobiModel(G, distanceCutOff, adjustedPriceMultiplier, pricesMileageLimits[mileageLimit])
+            model = buildGurobiModel(G, distanceCutOff, adjustedPriceMultiplier, pricesMileageLimits[mileageLimit], nVehiclesPerParking)
             try:
                 #model.Params.Presolve = 0
                 #model.Params.Method = 0
