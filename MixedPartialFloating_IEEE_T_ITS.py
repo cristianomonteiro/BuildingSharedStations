@@ -424,7 +424,7 @@ pricesMileageLimits = { 3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES}#,
 for mileageLimit in pricesMileageLimits.keys():
     #It is only simulated for distance of 500 meters because the Free-Floating used this, and smaller distances do not reach the same stations
     for distanceCutOff in [500]:#[100, 200, 300, 400, 500]:
-        for priceMultiplier in np.arange(2, 0, -0.1):
+        for priceMultiplier in np.arange(1.2, 0, -0.1):
             adjustedPriceMultiplier = round(priceMultiplier, 1)
             model = buildGurobiModel(G, distanceCutOff, adjustedPriceMultiplier, pricesMileageLimits[mileageLimit])
             try:
