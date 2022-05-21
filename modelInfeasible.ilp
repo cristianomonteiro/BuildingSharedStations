@@ -1,0 +1,26 @@
+\ Model IEEE T-ITS_copy
+\ LP format - for model browsing. Use MPS format to capture full model detail.
+Minimize
+ 
+Subject To
+ cnstr_idle_trip_25583_station_56582: - trip_25583_start_station_56582
+   + trip_25582_end_station_56582 + trip_54_end_station_56582
+   + idle_trip_31482_station_56582 - idle_trip_25583_station_56582 = 0
+ station_56582_last_vertex: - station_56582_flow_back
+   + idle_trip_25583_station_56582 = 0
+ cstr_start_trip_25583: trip_25583_start_station_56582 - trip_25583_filter
+   = 0
+ cstr_end_trip_25582: - trip_25582_end_station_56582 + trip_25582_filter
+   = 0
+Bounds
+ -infinity <= station_56582_flow_back <= 31
+ trip_25583_start_station_56582 free
+ -infinity <= trip_25583_filter <= 0
+ trip_25582_end_station_56582 free
+ trip_25582_filter >= 36
+ idle_trip_25583_station_56582 free
+Generals
+ station_56582_flow_back trip_25583_start_station_56582 trip_25583_filter
+ trip_25582_end_station_56582 trip_25582_filter trip_54_end_station_56582
+ idle_trip_31482_station_56582 idle_trip_25583_station_56582
+End
