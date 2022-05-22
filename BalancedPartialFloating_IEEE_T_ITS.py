@@ -8,6 +8,7 @@ from math import floor
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+from statistics import mean
 
 def loadMultiGraph():
     params = {'host':'localhost', 'port':'5432', 'database':'afterqualifying', 'user':'cristiano', 'password':'cristiano'}
@@ -113,6 +114,8 @@ def loadTrips(stations, places, tripsAmountServed, model):
                     tripsAmountServed=tripsAmountServed)
         trips[trip.idTrip] = trip
 
+        Trip.MAXIMUM_STATIONS_COST += trip.expansionFactor * Trip.MAXIMUM_PARKING_EXPENSE
+
     return trips
 
 def getVariable(varName, model):
@@ -134,7 +137,7 @@ class Place:
         self.reachedStations = list()
         reachedVertices = nx.single_source_dijkstra_path_length(G, self.idVertex, cutoff=distanceCutOff, weight='length')
         for item in reachedVertices.keys():
-            if isinstance(item, str) and item.startswith('station') and item in stationsInvolved:
+            if isinstance(item, str) and item.startswith('station') and item in stationsInvolved.keys():
                 self.reachedStations.append(item)
 
 def createVariable(nameVar, model, lowerBound=None, upperBound=None):
@@ -161,7 +164,7 @@ class Station:
 
         lowerBound = None
         upperBound = None
-        if self.idVertex in stationsInvolved:
+        if self.idVertex in stationsInvolved.keys():
             lowerBound = nVehiclesPerParking
             upperBound = maxVehiclesPerParking
         
@@ -183,6 +186,10 @@ class Trip:
     #Values for defining the new timestamps
     ADJUSTED_MONTH = 1
     ADJUSTED_YEAR = 2017
+
+    #Defining the maximum stations cost possible to penalize optimal but costful solutions
+    MAXIMUM_STATIONS_COST = 0
+    MAXIMUM_PARKING_EXPENSE = 500
 
     def adjustDay(timeDepartureOld, drivingDuration):
         #The weekday() starts from 0 but it does not exist a day 0 in the calendar. Then, a +1 solves this issue
@@ -223,13 +230,14 @@ class Trip:
 
             stations[endStation].tripsTimeEnd.append((self.timestampArrival, self.idTrip))
 
-        self.variableFilter = createVariable(nameVar=self.idTrip + '_filter', lowerBound=lowerBound, upperBound=floor(self.expansionFactor), model=model)
+        #In this simulation, the flow MUST be equal to the Free-floating simulation performed previously. Then, lowerBound = upperBound
+        self.variableFilter = createVariable(nameVar=self.idTrip + '_filter', lowerBound=lowerBound, upperBound=lowerBound, model=model)
 
-#Discover which trips and stations were served and used in the Free-floating with parameters 500 meters and 0.7 multiplier
+#Discover which trips and stations were served and used in the Restricted 1 31 with parameters 500 meters and 0.9 multiplier
 def selectTripsStationsInvolved():
-    fileName = 'Optimal Solutions/Free Floating/4000/500/70.json'
+    fileName = 'Optimal Solutions/Restricted 1 31 Partial Floating/3000/500/90.json'
     tripsAmountServed = {}
-    stationsInvolved = set()
+    stationsInvolved = {}
     with open(fileName) as jsonFile:
         optimalSolution = json.load(jsonFile)
 
@@ -241,48 +249,21 @@ def selectTripsStationsInvolved():
                 amountVehicles = int(var["X"])
                 if amountVehicles > 0:
                     idStation = 'station_' + varVTagSplit[1]
-                    stationsInvolved.add(idStation)
+                    stationsInvolved[idStation] = amountVehicles
 
             elif varVTag.startswith('trip') and varVTag.endswith('filter'):
                 idTrip = 'trip_' + varVTagSplit[1]
                 amountServed = int(var["X"])
                 if amountServed > 0:
                     tripsAmountServed[idTrip] = amountServed
-            
-            #Storing situations where the Free-Floating served a trip in a station with no allocated vehicles.
-            elif varVTag.startswith('trip') and varVTagSplit[3] == 'station':
-                amountServed = int(var["X"])
-                if amountServed > 0:
-                    idStation = 'station_' + varVTagSplit[4]
-                    stationsInvolved.add(idStation)
 
     return tripsAmountServed, stationsInvolved
 
-#Calculate the profits difference between the optimal solution for the current parameters and using Free-Floating with 500 meters and 0.7 multiplier
-def calculateProfitDifference(MINIMUM_FARE, RESERVATION_FEE, BASE_FARE, MINUTE_COST, KM_COST, priceMultiplier, trips, tripsServed):
-    freeFloatingProfitDifference = 0
-    for idTrip in tripsServed.keys():
-        trip = trips[idTrip]
-        freeFloatingProfitDifference += (0.7 - priceMultiplier) * max(MINIMUM_FARE,
-                    RESERVATION_FEE + BASE_FARE + MINUTE_COST * trip.drivingDuration + KM_COST * trip.drivingDistance/1000)
-    
-    return freeFloatingProfitDifference
-
-def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTAL_COSTS=2815.01, nVehiclesPerParking=0, maxVehiclesPerParking=float('inf')):
-    #Defining Uber costs
-    MINIMUM_FARE = 5.28
-    RESERVATION_FEE = 0.75
-    BASE_FARE = 2.67
-    MINUTE_COST = 0.3
-    KM_COST = 1.03
-
-    #Defining Gas prices. Price from https://precodoscombustiveis.com.br/pt-br/city/brasil/sao-paulo/sao-paulo/3830 got day 2022/11/04.
-    GAS_LITER = 7.07
-    DISTANCE_PER_LITER = 10
-    GAS_PER_KM = GAS_LITER / DISTANCE_PER_LITER
-
+def buildGurobiModel(G, distanceCutOff=100, MONTHLY_CAR_RENTAL_COSTS=2815.01, nVehiclesPerParking=0, maxVehiclesPerParking=float('inf')):
     #Discovering which trips were served and which stations were used in the Free Floating optimization
     tripsAmountServed, stationsInvolved = selectTripsStationsInvolved()
+    averageNumberVehicles = mean(stationsInvolved.values())
+    maxNumberVehicles = max(stationsInvolved.values())
 
     #Create a Gurobi Model
     model = gp.Model("IEEE T-ITS")
@@ -294,7 +275,7 @@ def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTA
     places = dict()
     for idVertex in G.nodes():
         if isinstance(idVertex, str):
-            if idVertex.startswith('station') and idVertex in stationsInvolved:
+            if idVertex.startswith('station') and idVertex in stationsInvolved.keys():
                 #All edges connected to a station has the same parkingExpenses attribute. Then [0][2] will get the attribute from the first edge
                 monthlyParkingExpenses = list(G.edges(idVertex, data='parkingexpenses'))[0][2]
                 station = Station(idVertex, monthlyParkingExpenses, stationsInvolved, nVehiclesPerParking, maxVehiclesPerParking, model)
@@ -310,24 +291,19 @@ def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTA
         if len(stations[station].tripsTimeStart) > 0:
             stations[station].defineIdleEdges(model)
 
-    #Calculate the profit difference between the optimizations
-    profitDifference = calculateProfitDifference(   MINIMUM_FARE=MINIMUM_FARE,
-                                                    RESERVATION_FEE=RESERVATION_FEE,
-                                                    BASE_FARE=BASE_FARE,
-                                                    MINUTE_COST=MINUTE_COST,
-                                                    KM_COST=KM_COST,
-                                                    priceMultiplier=priceMultiplier,
-                                                    trips=trips,
-                                                    tripsServed=tripsAmountServed)
-
     #Defining the objective and constraints
     print("Defining the objective and constraints")
     model.update()
-    objective = profitDifference
+    objective = 0
     for idStation, station in stations.items():
-        #The parking expenses data is monthly but the simulation is weekly, then it is divided by four.
-        #Also, it is a cost. Then the parking expenses is multiplied by minus one. The same for the rental cost.
-        objective += -1 * ((MONTHLY_CAR_RENTAL_COSTS + station.monthlyParkingExpenses)/4) * station.variableFlowBack
+        #Choosing an optimal solution with less costs
+        objective += ((MONTHLY_CAR_RENTAL_COSTS + station.monthlyParkingExpenses)/4) * station.variableFlowBack/Trip.MAXIMUM_STATIONS_COST
+
+        #Maximizing the sum of differences between the amount of vehicles in the Restricted 1 31 and this optimization
+        if averageNumberVehicles > stationsInvolved[idStation]:
+            objective += stationsInvolved[idStation] - station.variableStart
+        else:
+            objective += stationsInvolved[idStation] - station.variableStart * maxNumberVehicles
 
         #Adding constraint about the first station vertex
         model.addConstr(station.variableFlowBack - station.variableStart == 0, idStation + '_first_vertex')
@@ -338,11 +314,8 @@ def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTA
         for i, (timestampDeparture, idTrip) in enumerate(station.tripsTimeStart):
             trip = trips[idTrip]
 
-            tripStationVar = getVariable(idTrip + '_start_' + idStation, model)
-            objective += priceMultiplier * tripStationVar * max(MINIMUM_FARE,
-                        RESERVATION_FEE + BASE_FARE + MINUTE_COST * trip.drivingDuration + KM_COST * trip.drivingDistance/1000) - tripStationVar * GAS_PER_KM * trip.drivingDistance/1000
-            
             idleTripStationVar = getVariable('idle_' + idTrip + '_' + idStation, model)
+            tripStationVar = getVariable(idTrip + '_start_' + idStation, model)
 
             returnedVehiclesVars = list()
             flagBreak = False
@@ -392,7 +365,7 @@ def buildGurobiModel(G, distanceCutOff=100, priceMultiplier=1, MONTHLY_CAR_RENTA
         model.addConstr(sum(trip.startStationsVars) - tripFilterVar == 0, 'cstr_start_' + idTrip)
         model.addConstr(tripFilterVar - sum(trip.endStationsVars) == 0, 'cstr_end_' + idTrip)
 
-    #Set objective: maximize the utility value by allocating stations on edges
+    #Set objective: maximize the difference of vehicles in Restricted 1 31 and now, and choose a less expensive solution
     model.setObjective(objective, GRB.MAXIMIZE)
 
     print("MODEL BUILT!!")
@@ -419,55 +392,49 @@ MOVIDA_MONTHLY_RENTAL_4000_NO_GLASSES_TIRES = 2411.81
 #THIS PRICE INCLUDES PROTECTION FOR GLASSES AND TIRES. PRICE AS OF APRIL 10th, 2022. ADDITIONAL KMs WILL COST R$0,49.
 MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES = 2815.01
 
-pricesMileageLimits = { #3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES}#,
-                        4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
+pricesMileageLimits = { 3000: MOVIDA_MONTHLY_RENTAL_3000_WITH_GLASSES_TIRES}#,
+                        #4000: MOVIDA_MONTHLY_RENTAL_4000_WITH_GLASSES_TIRES}
 
 nVehiclesPerParking = 1
 for maxVehiclesPerParking in [31, 62, float('inf')]:
-    folderSaveSolutions = 'Optimal Solutions/Restricted ' + str(nVehiclesPerParking) + ' ' + str(maxVehiclesPerParking) + ' Partial Floating'
+    folderSaveSolutions = 'Optimal Solutions/Balanced ' + str(nVehiclesPerParking) + ' ' + str(maxVehiclesPerParking) + ' Partial Floating'
     for mileageLimit in pricesMileageLimits.keys():
         #It is only simulated for distance of 500 meters because the Free-Floating used this, and smaller distances do not reach the same stations
         for distanceCutOff in [500]:#[100, 200, 300, 400, 500]:
-            for priceMultiplier in np.arange(2, 0, -0.1):
-                adjustedPriceMultiplier = round(priceMultiplier, 1)
-                model = buildGurobiModel(G, distanceCutOff, adjustedPriceMultiplier, pricesMileageLimits[mileageLimit], nVehiclesPerParking, maxVehiclesPerParking)
-                try:
-                    #model.Params.Presolve = 0
-                    #model.Params.Method = 0
-                    model.Params.LogToConsole = 0
-                    model.optimize()
+            model = buildGurobiModel(G, distanceCutOff, pricesMileageLimits[mileageLimit], nVehiclesPerParking, maxVehiclesPerParking)
+            try:
+                #model.Params.Presolve = 0
+                #model.Params.Method = 0
+                model.Params.LogToConsole = 0
+                model.optimize()
 
-                    print('MODEL STATUS IS', gurobiStatus[model.status])
-                    print('MILEAGE:', mileageLimit, 'DISTANCE:', distanceCutOff, 'MULTIPLIER:', adjustedPriceMultiplier)
+                print('MODEL STATUS IS', gurobiStatus[model.status])
+                print('MILEAGE:', mileageLimit, 'DISTANCE:', distanceCutOff)
 
-                    if model.status == GRB.OPTIMAL:
-                        print("OBJECTIVE VALUE:", model.objVal)
-                        for variable in model.getVars():
-                            if abs(variable.X - round(variable.X)) > 0.001:
-                                print("ERROR:\tNOT AN INTEGER VALUE!!!", variable.VarName, variable.X)
-                                flagError = True
-                                break
-
-                        if model.objVal > 0.1:
-                            folderPath = Path('./' + folderSaveSolutions + '/' + str(mileageLimit) + '/' + str(distanceCutOff))
-                            folderPath.mkdir(parents=True, exist_ok=True)
-                            #Multiplier as percentage is easier to explain, then it is multiplied by 100. The round function was needed to fix numeric errors.
-                            percentagePrice = int(round(adjustedPriceMultiplier*100, 0))
-                            fileName = folderPath / (str(percentagePrice) + '.json')
-                            model.write(str(fileName.resolve()))
-                        else:
+                if model.status == GRB.OPTIMAL:
+                    print("OBJECTIVE VALUE:", model.objVal)
+                    for variable in model.getVars():
+                        if abs(variable.X - round(variable.X)) > 0.001:
+                            print("ERROR:\tNOT AN INTEGER VALUE!!!", variable.VarName, variable.X)
+                            flagError = True
                             break
-                    
-                    elif model.status == GRB.INFEASIBLE:
-                        model.computeIIS()
-                        model.write("modelInfeasible.ilp")
-                        break
 
-                except gp.GurobiError as e:
-                    print("ERROR:", str(e))
+                    folderPath = Path('./' + folderSaveSolutions + '/' + str(mileageLimit) + '/' + str(distanceCutOff))
+                    folderPath.mkdir(parents=True, exist_ok=True)
+                    #Multiplier as percentage is easier to explain, then it is multiplied by 100. The round function was needed to fix numeric errors.
+                    fileName = folderPath / 'balanced.json'
+                    model.write(str(fileName.resolve()))
+                
+                elif model.status == GRB.INFEASIBLE:
+                    model.computeIIS()
+                    model.write("modelInfeasible.ilp")
                     break
 
-                if flagError:
-                    break
+            except gp.GurobiError as e:
+                print("ERROR:", str(e))
+                break
+
             if flagError:
                 break
+        if flagError:
+            break
